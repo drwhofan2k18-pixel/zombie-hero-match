@@ -279,7 +279,7 @@ const MODES={
  bossrush:{icon:'\u{1F480}',name:'Boss Rush',desc:'Every wave is a boss wave - nothing but bosses spawn, they scale +60% faster and pay 2x gold.'},
  swarm:{icon:'\u{1F99F}',name:'Swarm',desc:'Huge fast waves - 80% more zombies, 35% quicker spawns, slightly softer bodies.'},
  survival:{icon:'\u{1F94A}',name:'Survival',desc:'One life. No barricade repairs of any kind - but kills pay +50% gold. Death wipes the save.'},
- coop:{icon:'\u{1F91D}',name:'Co-op 2P',desc:'Local co-op on one screen: P1 runs the board, P2\u2019s hero auto-fights beside you with their own ability button. Both heroes\u2019 passives stack. Zombies are 50% tougher.'},
+ coop:{icon:'\u{1F91D}',name:'Co-op 2P',desc:'Local co-op on one screen: P1 runs the board, P2\u2019s hero auto-fights beside you with their own ability button. Both heroes\u2019 passives stack, and both unlock off the shared hero level. Zombies are 50% tougher.'},
  daily:{name:'Daily',icon:'\u{1F4C5}',desc:'One fixed 25-wave run seeded from today\u2019s date - identical weather, mutators and spawns for every player. Finish or fall, then compare daily codes.'}
 };
 const DAILY_WAVES=25;
@@ -358,6 +358,9 @@ function heroDef(){return HEROES[S.classId]||HEROES.soldier}
 function xpNeed(l){return 50+40*l}
 function heroUnlocked(){return heroDef().abil.filter(a=>S.heroLvl>=a.lvl)}
 function activeAbility(){return heroDef().abil.find(a=>!a.passive&&S.heroLvl>=a.lvl)||null}
+// Co-op note (audit N-2, documented): there is one shared hero level. P2's
+// passives/ability unlock exactly when P1's do (both read S.heroLvl), and the
+// passive effects of both classes stack via hasPassive below.
 function hasPassive(id){return heroUnlocked().some(a=>a.id===id)||(S&&S.mode==='coop'&&allyUnlocked().some(a=>a.id===id))}
 function allyDef(){return S&&S.class2Id?HEROES[S.class2Id]:null}
 function allyUnlocked(){const d=allyDef();return d?d.abil.filter(a=>S.heroLvl>=a.lvl):[]}
@@ -960,6 +963,13 @@ const META_KEY='zms_meta';
 let META={ach:{},stats:{totalKills:0,bossKills:0,bestWave:0,combos4:0,combos5:0,multiMatches:0,bestChain:0,closeCall:0,classes:[],challengesDone:0,dailiesDone:0,coopWaves:0,mutWaves:0,bestBossRush:0,bestSurvival:0}};
 function metaLoad(){try{const d=JSON.parse(localStorage.getItem(META_KEY)||'null');if(d){META.ach=d.ach||{};META.stats=Object.assign(META.stats,d.stats||{})}}catch(e){}}
 function metaSave(){try{localStorage.setItem(META_KEY,JSON.stringify(META))}catch(e){}}
+// v7.1.1 (audit N-1): per-kill metaSave() meant a localStorage write per kill -
+// noisy on late Swarm waves. Kill-driven stat writes are debounced (2s trailing);
+// anything that must not be lost (achievements, wave/mode stats) saves at once,
+// and game-over/daily-complete flush a pending write before the run ends.
+let metaSaveT=null;
+function metaSaveSoon(){if(metaSaveT==null){metaSaveT=setTimeout(function(){metaSaveT=null;metaSave()},2000)}}
+function metaSaveNow(){if(metaSaveT!=null){clearTimeout(metaSaveT);metaSaveT=null}metaSave()}
 const ACH=[
  {id:'firstkill',name:'First Blood',icon:'\u{1FA78}',desc:'Kill your first zombie',cond:()=>META.stats.totalKills>=1},
  {id:'kills100',name:'Zombie Slayer',icon:'\u{2694}\u{FE0F}',desc:'100 total kills',cond:()=>META.stats.totalKills>=100},
@@ -1150,7 +1160,7 @@ const ZPOINTS={regular:100,runner:150,armored:200,brute:1000,boss:5000};
 function killZombie(z){
  z.alive=false;
  S.score+=ZPOINTS[z.type]||100;S.kills++;
- META.stats.totalKills++;if(z.type==='boss')META.stats.bossKills++;metaSave();checkAch();
+ META.stats.totalKills++;if(z.type==='boss')META.stats.bossKills++;metaSaveSoon();checkAch();
  $('uscore').textContent=S.score;
  if(S.chal&&S.chal.id==='killrace')S.chal.prog++;
  const g=Math.round(ZTYPES[z.type].gold*(1+0.25*S.up.greed)*(S.mode==='survival'?1.5:1)*(hasMut('goldrush')?2:1)*(S.mode==='bossrush'&&z.type==='boss'?2:1));
@@ -1475,7 +1485,7 @@ function writeRestartSave(){
  return keep;
 }
 function gameOver(){
- S.over=true;S.screen='over';
+ S.over=true;S.screen='over';metaSaveNow();
  $('abBtn').style.display='none';const b2=$('ab2Btn');if(b2)b2.style.display='none';
  $('ovUpgrade').style.display='none';
  sfx.over();
@@ -1490,7 +1500,7 @@ function gameOver(){
  $('ovOver').style.display='flex';
 }
 function dailyComplete(){
- S.over=true;S.screen='over';
+ S.over=true;S.screen='over';metaSaveNow();
  $('abBtn').style.display='none';const b2=$('ab2Btn');if(b2)b2.style.display='none';
  $('ovUpgrade').style.display='none';
  sfx.wave();sfx.combo();

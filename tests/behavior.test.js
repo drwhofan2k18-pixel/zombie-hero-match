@@ -554,3 +554,50 @@ test('L-5 continue button names a stale daily seed explicitly', async () => {
   const g3 = await loadGame(GAME, { localStorage: stub2 });
   assert.ok(!g3.el('btnContinue').textContent.includes('DAILY'), 'fresh daily must not be flagged stale');
 });
+
+// N-1: kill-driven meta writes are debounced - a kill burst must not hit
+// localStorage once per kill, and a pending write must flush at run end.
+test('N-1 per-kill meta stats are batched and flushed, not written per kill', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'classic');
+  await g.step(2);
+  clearHorde(g);
+  const z1 = addZ(g, { hp: 1, maxHp: 1, type: 'regular' });
+  g.M.killZombie(z1);                      // unlocks First Blood -> immediate save
+  const afterFirst = JSON.parse(g.storage.getItem('zms_meta'));
+  assert.equal(afterFirst.stats.totalKills, 1, 'achievement save flushed the first kill');
+  assert.ok(afterFirst.ach.firstkill);
+
+  // silence further unlocks so nothing but the debounced kill write remains
+  g.META.ach.kills100 = 1; g.META.ach.kills500 = 1; g.META.ach.kills1000 = 1;
+  g.META.stats.totalKills = 5;
+  g.storage.setItem('zms_meta', JSON.stringify(g.META));
+  clearHorde(g);
+  for (let i = 0; i < 10; i++) { const z = addZ(g, { hp: 1, maxHp: 1 }); g.M.killZombie(z); }
+  assert.equal(g.META.stats.totalKills, 15, 'kills counted in memory');
+  let onDisk = JSON.parse(g.storage.getItem('zms_meta'));
+  assert.equal(onDisk.stats.totalKills, 5, 'kill burst must NOT have written yet (debounced)');
+
+  g.tick(2500);                            // flush the 2s trailing debounce
+  onDisk = JSON.parse(g.storage.getItem('zms_meta'));
+  assert.equal(onDisk.stats.totalKills, 15, 'debounced write must land after the window');
+
+  // and a pending write must not be lost when the run ends
+  g.META.stats.totalKills = 20;
+  g.M.killZombie(addZ(g, { hp: 1, maxHp: 1 }));
+  g.M.gameOver();                          // flushes metaSaveNow()
+  onDisk = JSON.parse(g.storage.getItem('zms_meta'));
+  assert.equal(onDisk.stats.totalKills, 21, 'game over must flush the pending kill write');
+});
+
+// N-2: co-op ally gating is documented behaviour - P2 unlocks ride the shared level.
+test('N-2 co-op ally passives gate on the shared hero level', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'coop', 'mage');
+  await g.step(2);
+  g.S.heroLvl = 1;
+  assert.equal(g.M.hasPassive('critburst'), false, 'below Lv2 neither hero has passives');
+  g.S.heroLvl = 2;
+  assert.equal(g.M.hasPassive('critburst'), true, 'P1 passive at Lv2');
+  assert.equal(g.M.hasPassive('chainnova'), true, 'P2 passive also unlocks at the shared Lv2');
+});
