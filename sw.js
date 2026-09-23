@@ -1,5 +1,9 @@
 // RJL's Zombie Hero Match - offline cache
-const CACHE = 'zhm-v7';
+// v7.1: cache names are namespaced (zhm-*) before deletion. v7 deleted every
+// cache on the origin except its own, which wipes sibling apps hosted on the
+// same GitHub Pages origin.
+const CACHE = 'zhm-v7-1';
+const NS = 'zhm-';
 const ASSETS = [
   './',
   'index.html',
@@ -16,7 +20,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k.startsWith(NS) && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

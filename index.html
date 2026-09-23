@@ -176,11 +176,44 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0a0a14;font-family:
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-let RNGF=Math.random;
-const rand=(a,b)=>a+RNGF()*(b-a);
-const rnd=()=>RNGF();
+// ---------- RNG STREAMS (v7.1) ----------
+// Three deliberately separate streams, because v7 mixed them and that broke the
+// Daily Challenge (proved in docs/qa/v7.1-assessment.md, finding D-1):
+//   srand/srnd -> SEEDED gameplay: wave rolls, spawn typing/lane/timing, events
+//   prand/prnd -> PLAYER-skill dependent: board dealing, shuffles, crits, pick-a-target
+//   fxrand/fxrnd -> JUICE: gore, lightning, wind, particles. Never gameplay.
+// Only the first stream is seeded for the Daily Challenge, so two players on the
+// same day get identical weather, mutators, challenges and horde composition no
+// matter how the particles happen to fly on their device.
+let RSPN=Math.random, RWAVE=Math.random, RPLY=Math.random, RFX=Math.random;
+const srand=(a,b)=>a+RSPN()*(b-a);
+const srnd=()=>RSPN();
+const wrand=(a,b)=>a+RWAVE()*(b-a);
+const wrnd=()=>RWAVE();
+const prand=(a,b)=>a+RPLY()*(b-a);
+const prnd=()=>RPLY();
+const fxrand=(a,b)=>a+RFX()*(b-a);
+const fxrnd=()=>RFX();
 function mulberry32(seed){let a=seed>>>0;return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+// Per-(day,wave) keys so a Daily resumed at wave N draws exactly the same wave-N
+// horde as an uninterrupted run (v7 re-seeded from wave 1 on continue).
+function keyDayRng(day,wave){
+ if(day==null){RWAVE=Math.random;RSPN=Math.random;return}
+ RWAVE=mulberry32((((day*2654435761)^(wave*2246822519)^0x9E3779B9)>>>0));
+ RSPN=mulberry32((((day*2654435761)^(wave*2246822519)^0x85EBCA6B)>>>0));
+}
+// The supply drop gets its own key so skipping the wave rolls on a save/continue
+// cannot shift its contents either.
+function dropRng(day,wave){
+ return day==null?Math.random:mulberry32((((day*40503)^(wave*1000003)^0x51ED257)>>>0));
+}
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+// ---------- FIELD GEOMETRY (v7.1) ----------
+// v7 read $('field').clientWidth inside updateZombieEl(), i.e. once per zombie
+// per frame alongside style writes - a forced layout per zombie. Snapshot it.
+const FB={w:390,h:200};
+function syncFieldBox(){const f=$('field');if(!f)return FB;const w=f.clientWidth,h=f.clientHeight;if(w)FB.w=w;if(h)FB.h=h;return FB}
 
 // ---------- AUDIO (WebAudio blips, style reused from zombietoss repo) ----------
 let AC;
@@ -243,7 +276,7 @@ const XPVAL={regular:10,runner:14,armored:20,brute:60,boss:200};
 // ---------- MODES (v7) ----------
 const MODES={
  classic:{icon:'\u{1F3DF}\u{FE0F}',name:'Classic',desc:'The full campaign - 100+ waves, a boss every 10th, endless scaling.'},
- bossrush:{icon:'\u{1F480}',name:'Boss Rush',desc:'Every wave is a boss wave. Bosses scale fast and pay 2x gold.'},
+ bossrush:{icon:'\u{1F480}',name:'Boss Rush',desc:'Every wave is a boss wave - nothing but bosses spawn, they scale +60% faster and pay 2x gold.'},
  swarm:{icon:'\u{1F99F}',name:'Swarm',desc:'Huge fast waves - 80% more zombies, 35% quicker spawns, slightly softer bodies.'},
  survival:{icon:'\u{1F94A}',name:'Survival',desc:'One life. No barricade repairs of any kind - but kills pay +50% gold. Death wipes the save.'},
  coop:{icon:'\u{1F91D}',name:'Co-op 2P',desc:'Local co-op on one screen: P1 runs the board, P2\u2019s hero auto-fights beside you with their own ability button. Both heroes\u2019 passives stack. Zombies are 50% tougher.'},
@@ -256,6 +289,11 @@ function dailyCode(){
  const s=S.score,k=S.kills,w=S.wave;
  const chk=(s*31+k*7+w*13)%46656;
  return 'D'+(S.day||dailyDayStr())+'-'+s.toString(36).toUpperCase()+'-'+k.toString(36).toUpperCase()+'-'+chk.toString(36).toUpperCase();
+}
+// v7.1: exact same horde for every player, wave by wave - assertable in tests
+function dailyWaveCode(n){
+ const types=S.zombies.filter(z=>z.alive).map(z=>z.type[0]+z.lane).join('');
+ return 'W'+n+'-'+types;
 }
 
 // ---------- MUTATORS (v7: per-wave random modifiers) ----------
@@ -272,8 +310,8 @@ function rollMutators(n){
  S.muts=[];
  if(n<3)return;
  const keys=Object.keys(MUTATORS);
- const count=n>=12&&rnd()<.35?2:(rnd()<.55?1:0);
- for(let i=0;i<count;i++){const k=keys[Math.floor(rand(0,keys.length))];if(S.muts.indexOf(k)<0)S.muts.push(k)}
+ const count=n>=12&&wrnd()<.35?2:(wrnd()<.55?1:0);
+ for(let i=0;i<count;i++){const k=keys[Math.floor(wrand(0,keys.length))];if(S.muts.indexOf(k)<0)S.muts.push(k)}
 }
 
 // ---------- WAVE CHALLENGES (v7: optional per-wave objectives, reward only) ----------
@@ -285,22 +323,26 @@ const CHALLENGES=[
 ];
 function rollChallenge(n){
  S.chal=null;
- if(n<2||rnd()<.35)return;
- const c=CHALLENGES[Math.floor(rand(0,CHALLENGES.length))];
+ if(n<2||wrnd()<.35)return;
+ const c=CHALLENGES[Math.floor(wrand(0,CHALLENGES.length))];
  S.chal={id:c.id,icon:c.icon,name:c.name,desc:c.desc,prog:0};
 }
 
 // ---------- RANDOM EVENTS (v7) ----------
 function supplyDrop(){
  if(!S||S.over||S.screen!=='game')return;
+ const spec=S.dropSpec||{lane:0,patch:false};S.dropSpec=null;
  const f=$('field');const el=document.createElement('div');el.className='drop';el.textContent='\u{1F4E6}';
- const lane=Math.floor(rand(0,LANES));
+ const lane=Math.floor(spec.lane);
  el.style.top=(lane*LH+Math.max(0,LH/2-18))+'px';el.style.left='55%';
  f.appendChild(el);
  let taken=false;
  bindTap(el,()=>{
   if(taken)return;taken=true;el.remove();
-  if(rnd()<.5){const g=30+S.wave*3;S.gold+=g;$('ugold').textContent=S.gold;toast('\u{1F4B0} Supply drop: +'+g+' gold!')}
+  // v7.1: Survival blocks ALL barricade repair, so it must not offer (or claim) one.
+  // The contents were pre-rolled at wave start from dropRng(), so they are seeded too.
+  const canPatch=S.mode!=='survival'&&spec.patch;
+  if(!canPatch){const g=30+S.wave*3;S.gold+=g;$('ugold').textContent=S.gold;toast('\u{1F4B0} Supply drop: +'+g+' gold!')}
   else{healBarricade(Math.round(S.maxHp*.15));toast('\u{2764}\u{FE0F} Supply drop: barricade patched!')}
   sfx.buy();saveGame();
  });
@@ -388,7 +430,7 @@ function castAbilityFor(h){
    setTimeout(()=>{
     if(!S||S.over)return;
     const alive=S.zombies.filter(z=>z.alive);if(!alive.length)return;
-    const t=alive[Math.floor(rand(0,alive.length))];
+    const t=alive[Math.floor(prand(0,alive.length))];
     spawnProj(origin,zPos(t),'\u{27B9}',110);
     dealDamage(t,40+10*S.heroLvl,'bolt',false);
    },i*90);
@@ -416,18 +458,27 @@ function freshState(classId,mode,class2Id){
   up:{dmg:0,vit:0,greed:0,perk:0},
   grid:[],zombies:[],zid:0,busy:false,sel:null,chain:0,
   spawnQueue:0,spawnT:0,spawnInt:2.2,time:0,over:false,bossPending:false,weather:'clear',
-  muts:[],chal:null,stampedeT:0,dropT:0,_waveHits:0,_bigMatch:false,_waveGold:0};
+  muts:[],chal:null,horde:[],hordeAt:0,dropT:0,dropSpec:null,_stampedeTold:false,
+  _waveHits:0,_bigMatch:false,_waveGold:0,_stormBolt:false};
 }
+// The save payload is the run's contract with Continue. v7 omitted abCD and the
+// per-wave mutator/challenge rolls, so a reload silently re-rolled them.
 function saveGame(){
  if(!S)return;
- try{localStorage.setItem('zms_save',JSON.stringify({classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:S.wave,gold:S.gold,score:S.score,kills:S.kills,maxHp:S.maxHp,hp:S.hp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP,weather:S.weather}))}catch(e){}
+ try{localStorage.setItem('zms_save',JSON.stringify({classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:S.wave,gold:S.gold,score:S.score,kills:S.kills,maxHp:S.maxHp,hp:S.hp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP,weather:S.weather,muts:S.muts,chal:S.chal,abCD:S.abCD,ab2CD:S.ab2CD,alive:1}))}catch(e){}
 }
 function loadSave(){
- try{const d=JSON.parse(localStorage.getItem('zms_save')||'null');return d&&d.classId?d:null}catch(e){return null}
+ try{const d=JSON.parse(localStorage.getItem('zms_save')||'null');return d&&d.classId&&d.alive!==0?d:null}catch(e){return null}
 }
 function applySave(d){
- S=freshState(d.classId);S.wave=d.wave||1;S.gold=d.gold||0;S.maxHp=d.maxHp||100;S.hp=clamp(d.hp||S.maxHp,1,S.maxHp);S.up=Object.assign({dmg:0,vit:0,greed:0,perk:0},d.up);
+ S=freshState(d.classId);S.wave=d.wave||1;S.gold=d.gold||0;S.maxHp=d.maxHp||100;
+ // v7.1: `d.hp||S.maxHp` turned a 0-HP save into a free full heal.
+ S.hp=clamp(d.hp==null?S.maxHp:(Number(d.hp)||0),0,S.maxHp);
+ S.up=Object.assign({dmg:0,vit:0,greed:0,perk:0},d.up);
  S.heroLvl=d.heroLvl||1;S.heroXP=d.heroXP||0;S.score=d.score||0;S.kills=d.kills||0;S.weather=d.weather||'clear';S.mode=d.mode||'classic';S.class2Id=d.class2Id||null;S.day=d.day||null;
+ S.muts=Array.isArray(d.muts)?d.muts.slice():[];
+ S.chal=d.chal&&d.chal.id?d.chal:null;
+ S.abCD=Math.max(0,Number(d.abCD)||0);S.ab2CD=Math.max(0,Number(d.ab2CD)||0);
 }
 
 // ---------- LAYOUT ----------
@@ -436,6 +487,7 @@ function layout(){
  W=window.innerWidth;H=window.innerHeight;
  const f=$('field');f.style.height=Math.round(H*0.34)+'px';
  LH=(H*0.34)/LANES;
+ syncFieldBox();
  CS=Math.floor(Math.min((Math.min(W,520)-14)/G,(H*0.52)/G));
  const g=$('grid');g.style.width=CS*G+'px';g.style.height=CS*G+'px';
  const f2=$('field');f2.querySelectorAll('.lanebg').forEach(e=>e.remove());
@@ -455,16 +507,16 @@ function ensureHero(){
 }
 
 // ---------- GRID ----------
-function newTile(r,c){return{r:r,c:c,color:Math.floor(rand(0,COLORS.length)),el:null}}
+function newTile(r,c){return{r:r,c:c,color:Math.floor(prand(0,COLORS.length)),el:null}}
 function buildGrid(){
  S.grid=[];
  for(let r=0;r<G;r++){S.grid.push([]);for(let c=0;c<G;c++)S.grid[r].push(newTile(r,c))}
  // avoid starting matches
  let guard=0;
  while(findMatches().length&&guard++<50){
-  findMatches().forEach(gp=>gp.cells.forEach(cell=>{S.grid[cell.r][cell.c].color=Math.floor(rand(0,COLORS.length))}));
+  findMatches().forEach(gp=>gp.cells.forEach(cell=>{S.grid[cell.r][cell.c].color=Math.floor(prand(0,COLORS.length))}));
  }
- if(!hasMove())buildGrid();
+ if(!hasMove())shuffleGrid();
 }
 function tilePos(t){return{x:t.c*CS+2,y:t.r*CS+2}}
 function renderTile(t){
@@ -534,7 +586,7 @@ function shuffleGrid(){
  const colors=[];S.grid.forEach(row=>row.forEach(t=>colors.push(t.color)));
  let guard=0;
  do{
-  for(let i=colors.length-1;i>0;i--){const j=Math.floor(rand(0,i+1));const x=colors[i];colors[i]=colors[j];colors[j]=x}
+  for(let i=colors.length-1;i>0;i--){const j=Math.floor(prand(0,i+1));const x=colors[i];colors[i]=colors[j];colors[j]=x}
   let k=0;S.grid.forEach(row=>row.forEach(t=>{t.color=colors[k++]}));
  }while((findMatches().length||!hasMove())&&guard++<80);
  renderAllTiles();toast('Shuffled!');
@@ -633,7 +685,7 @@ function rollWeather(){
   .filter(function(e){return e[0]!==prev});
  let total=0;
  for(const e of table)total+=e[1];
- let r=rnd()*total,pick=table[table.length-1][0];
+ let r=wrnd()*total,pick=table[table.length-1][0];
  for(const e of table){r-=e[1];if(r<=0){pick=e[0];break}}
  return pick;
 }
@@ -660,7 +712,7 @@ const FOG_LAYERS=[
 function sizeFx(){
  const f=$('field');if(!f)return;
  const dpr=Math.min(2,window.devicePixelRatio||1);
- const w=f.clientWidth,h=f.clientHeight;
+ const box=syncFieldBox();const w=box.w,h=box.h;
  if(!w||!h)return;
  wcv.w=w;wcv.h=h;wcv.dpr=dpr;
  [['wback','bx'],['gorecv','gx'],['wfore','fx']].forEach(function(pair){
@@ -675,26 +727,26 @@ function sizeFx(){
 function seedFx(w){
  wst.cur=w;
  wst.drops.length=0;wst.flakes.length=0;wst.splashes.length=0;wst.windLines.length=0;
- wst.bolt=null;wst.boltT=rand(1.5,4);
+ wst.bolt=null;wst.boltT=fxrand(1.5,4);
  const fw=wcv.w||390,fh=wcv.h||300;
  if(w==='rain'||w==='storm'){
   const mul=w==='storm'?1.35:1;
   for(const L of RAIN_LAYERS){
    const n=Math.round(L.n*mul);
-   for(let i=0;i<n;i++)wst.drops.push({x:rand(0,fw),y:rand(-fh,fh),len:rand(L.len[0],L.len[1]),spd:rand(L.spd[0],L.spd[1]),L:L});
+   for(let i=0;i<n;i++)wst.drops.push({x:fxrand(0,fw),y:fxrand(-fh,fh),len:fxrand(L.len[0],L.len[1]),spd:fxrand(L.spd[0],L.spd[1]),L:L});
   }
  }
  if(w==='snow'){
-  for(const L of SNOW_LAYERS)for(let i=0;i<L.n;i++)wst.flakes.push({x:rand(0,fw),y:rand(0,fh),r:rand(L.r[0],L.r[1]),spd:rand(L.spd[0],L.spd[1]),ph:rand(0,6.28),L:L});
+  for(const L of SNOW_LAYERS)for(let i=0;i<L.n;i++)wst.flakes.push({x:fxrand(0,fw),y:fxrand(0,fh),r:fxrand(L.r[0],L.r[1]),spd:fxrand(L.spd[0],L.spd[1]),ph:fxrand(0,6.28),L:L});
  }
- if(w==='fog')wst.fogOff=FOG_LAYERS.map(function(){return rand(0,600)});
+ if(w==='fog')wst.fogOff=FOG_LAYERS.map(function(){return fxrand(0,600)});
 }
 // wind gust state machine (ported from zombietoss updateWind): 30% chance of a gust, decays between fronts
 function updGust(dt){
  wst.gustT-=dt;
  if(wst.gustT<=0){
-  if(Math.random()<0.3){wst.gust=rand(-3,3);wst.gustT=rand(.5,1.5)}
-  else{wst.gust=0;wst.gustT=rand(1,3)}
+  if(fxrnd()<0.3){wst.gust=fxrand(-3,3);wst.gustT=fxrand(.5,1.5)}
+  else{wst.gust=0;wst.gustT=fxrand(1,3)}
  }
 }
 function updRain(dt,mul){
@@ -703,7 +755,7 @@ function updRain(dt,mul){
   d.y+=d.spd*mul*dt;d.x+=wst.gust*34*dt;
   if(d.y>fl){
    if(wst.splashes.length<36)wst.splashes.push({x:d.x,life:.26});
-   d.y=rand(-40,-6);d.x=rand(-20,wcv.w+20);
+   d.y=fxrand(-40,-6);d.x=fxrand(-20,wcv.w+20);
   }
   if(d.x>wcv.w+24)d.x=-20;else if(d.x<-24)d.x=wcv.w+20;
  }
@@ -734,7 +786,7 @@ function drawSplashes(){
 function updSnow(dt){
  for(const f of wst.flakes){
   f.y+=f.spd*dt;f.x+=(Math.sin(wst.t*1.1+f.ph)*16*f.L.sw+wst.gust*22)*dt;
-  if(f.y>wcv.h-2){f.y=rand(-14,-4);f.x=rand(0,wcv.w)}
+  if(f.y>wcv.h-2){f.y=fxrand(-14,-4);f.x=fxrand(0,wcv.w)}
   if(f.x>wcv.w+8)f.x=-6;else if(f.x<-8)f.x=wcv.w+6;
  }
 }
@@ -759,7 +811,7 @@ function drawSnowCap(){
  ctx.fillStyle=g;ctx.fillRect(0,wcv.h-h*1.8,wcv.w,h*1.8);
 }
 function updFog(dt){
- if(!wst.fogOff)wst.fogOff=FOG_LAYERS.map(function(){return rand(0,600)});
+ if(!wst.fogOff)wst.fogOff=FOG_LAYERS.map(function(){return fxrand(0,600)});
  for(let i=0;i<FOG_LAYERS.length;i++){
   wst.fogOff[i]+=FOG_LAYERS[i].spd*(1+Math.abs(wst.gust)*.25)*dt;
   if(wst.fogOff[i]>wcv.w+400)wst.fogOff[i]=-400;
@@ -790,7 +842,7 @@ function drawFog(){
 // clear sky still gets depth: slow parallax cloud shadows behind, drifting dust motes in front
 function updClouds(dt){
  if(!wst.puffs.length){
-  for(let i=0;i<3;i++)wst.puffs.push({x:rand(0,wcv.w),y:rand(6,wcv.h*.3),rx:rand(50,90),ry:rand(10,18),spd:rand(4,9),a:rand(.04,.08)});
+  for(let i=0;i<3;i++)wst.puffs.push({x:fxrand(0,wcv.w),y:fxrand(6,wcv.h*.3),rx:fxrand(50,90),ry:fxrand(10,18),spd:fxrand(4,9),a:fxrand(.04,.08)});
  }
  for(const p of wst.puffs){p.x+=p.spd*dt*(1+wst.gust*.2);if(p.x-p.rx>wcv.w)p.x=-p.rx}
 }
@@ -799,7 +851,7 @@ function drawClouds(){
  for(const p of wst.puffs){ctx.fillStyle='rgba(200,210,230,'+p.a+')';ctx.beginPath();ctx.ellipse(p.x,p.y,p.rx,p.ry,0,0,6.28);ctx.fill()}
 }
 function updDust(dt){
- if(!wst.dust.length){for(let i=0;i<12;i++)wst.dust.push({x:rand(0,wcv.w),y:rand(0,wcv.h),ph:rand(0,6.28)})}
+ if(!wst.dust.length){for(let i=0;i<12;i++)wst.dust.push({x:fxrand(0,wcv.w),y:fxrand(0,wcv.h),ph:fxrand(0,6.28)})}
  for(const d of wst.dust){
   d.x+=(Math.sin(wst.t*.7+d.ph)*8+wst.gust*6)*dt;d.y+=Math.cos(wst.t*.5+d.ph)*5*dt;
   if(d.x<0)d.x=wcv.w;else if(d.x>wcv.w)d.x=0;
@@ -816,8 +868,8 @@ function drawDust(){
 function updWindLines(dt){
  const g=wst.gust;
  if(Math.abs(g)<1.2){wst.windLines.length=0;return}
- if(Math.random()<.2*Math.abs(g)&&wst.windLines.length<14){
-  wst.windLines.push({x:g>0?-40:wcv.w+40,y:rand(0,wcv.h),len:rand(30,80),life:1,spd:Math.abs(g)*160});
+ if(fxrnd()<.2*Math.abs(g)&&wst.windLines.length<14){
+  wst.windLines.push({x:g>0?-40:wcv.w+40,y:fxrand(0,wcv.h),len:fxrand(30,80),life:1,spd:Math.abs(g)*160});
  }
  for(let i=wst.windLines.length-1;i>=0;i--){const l=wst.windLines[i];
   l.x+=(g>0?1:-1)*l.spd*dt;l.life-=.9*dt;
@@ -834,17 +886,17 @@ function drawWindLines(){
 // lightning: foreground jagged bolt + sky flash + delayed thunder (zombietoss triggerLightning pattern)
 function updStorm(dt){
  wst.boltT-=dt;
- if(wst.boltT<=0){wst.boltT=rand(3.5,8);strikeBolt()}
+ if(wst.boltT<=0){wst.boltT=fxrand(3.5,8);strikeBolt()}
  if(wst.bolt){wst.bolt.life-=dt;if(wst.bolt.life<=0)wst.bolt=null}
 }
 function strikeBolt(){
- const x0=rand(wcv.w*.15,wcv.w*.85);
+ const x0=fxrand(wcv.w*.15,wcv.w*.85);
  const pts=[[x0,-4]];let x=x0,y=-4;
- const yEnd=rand(wcv.h*.45,wcv.h*.8);
- while(y<yEnd){y+=rand(14,30);x=clamp(x+rand(-22,22),6,wcv.w-6);pts.push([x,y])}
+ const yEnd=fxrand(wcv.h*.45,wcv.h*.8);
+ while(y<yEnd){y+=fxrand(14,30);x=clamp(x+fxrand(-22,22),6,wcv.w-6);pts.push([x,y])}
  wst.bolt={pts:pts,life:.16};
  skyFlash();
- setTimeout(function(){ns(.4,.13);tn(70,.5,'sawtooth',.05)},rand(200,800));
+ setTimeout(function(){ns(.4,.13);tn(70,.5,'sawtooth',.05)},fxrand(200,800));
 }
 function skyFlash(){
  const f=$('wflash');if(!f)return;
@@ -918,7 +970,7 @@ const ACH=[
  {id:'daily1',name:'Daily Grind',icon:'\u{1F4C5}',desc:'Complete a daily challenge',cond:()=>META.stats.dailiesDone>=1},
  {id:'daily7',name:'Creature of Habit',icon:'\u{1F5D3}\u{FE0F}',desc:'Complete 7 daily challenges',cond:()=>META.stats.dailiesDone>=7,rarity:'rare'},
  {id:'buddy',name:'Buddy System',icon:'\u{1F91D}',desc:'Clear a wave in co-op mode',cond:()=>META.stats.coopWaves>=1},
- {id:'mutwin',name:'Mutation Station',icon:'\u{1F9EC}',desc:'Clear a wave under 2 mutators',cond:()=>META.stats.mutWaves>=1},
+ {id:'mutwin',name:'Mutation Station',icon:'\u{1F9EC}',desc:'Clear a wave with 2 or more mutators active',cond:()=>META.stats.mutWaves>=1},
  {id:'rush10',name:'Rush Hour',icon:'\u{1F480}',desc:'Reach wave 10 in Boss Rush',cond:()=>META.stats.bestBossRush>=10,rarity:'rare'},
  {id:'surv10',name:'Still Standing',icon:'\u{1F94A}',desc:'Reach wave 10 in Survival',cond:()=>META.stats.bestSurvival>=10,rarity:'rare'}
 ];
@@ -935,6 +987,8 @@ function checkAch(){
 }
 function renderAch(){
  const list=$('achList');if(!list)return;
+ // v7.1: rebuilding 28 rows on every unlock is wasted work when the panel is hidden
+ if(!$('ovAch')||$('ovAch').style.display==='none')return;
  list.innerHTML='';
  let un=0;
  ACH.forEach(a=>{
@@ -983,9 +1037,9 @@ function comboReward(groups,chain){
 
 // ---------- COMBAT ----------
 function classDmgMult(){let m=1;if(S.classId==='soldier')m*=1.3;if(S.classId==='ranger')m*=1.15;if(S.classId==='cleric')m*=1.1;if(S.classId==='necro')m*=1.2;return m}
-function heroPos(){const f=$('field');return{x:32,y:f.clientHeight*(S&&S.mode==='coop'?0.3:0.5)}}
-function allyPos(){const f=$('field');return{x:32,y:f.clientHeight*0.7}}
-function zPos(z){const f=$('field');const fw=f.clientWidth-40;return{x:10+z.x*fw+(z.size||36)/2,y:z.lane*LH+LH/2}}
+function heroPos(){return{x:32,y:FB.h*(S&&S.mode==='coop'?0.3:0.5)}}
+function allyPos(){return{x:32,y:FB.h*0.7}}
+function zPos(z){const fw=FB.w-40;return{x:10+z.x*fw+(z.size||36)/2,y:z.lane*LH+LH/2}}
 function heroAtkAnim(){
  const h=$('hero');if(!h)return;
  h.classList.remove('atk');void h.offsetWidth;h.classList.add('atk');
@@ -1020,14 +1074,19 @@ function attack(groups,chain,comboMult){
  const zs=S.zombies.filter(z=>z.alive);
  if(!zs.length)return;
  const hd=heroDef();
+ // v7.1: one frontmost zombie per colour group, so a multi-line match spreads
+ // its damage instead of piling all three colours onto a single body.
+ const order=zs.slice().sort((a,b)=>b.x-a.x);
+ let slot=0;
  groups.forEach(gp=>{
   const cn=COLORS[gp.color].name;
   const size=gp.cells.length;
   let dmg=size*8*(1+0.2*S.up.dmg)*(1+0.5*(chain-1))*(comboMult||1);
   if(size===4)dmg*=1.5;if(size>=5)dmg*=2;
   dmg*=classDmgMult();
-  // target: frontmost zombie
-  const target=zs.reduce((a,b)=>!a||b.x>a.x?b:a,null);
+  // target: the next frontmost zombie still standing
+  let target=order[slot%order.length];slot++;
+  if(!target||!target.alive)target=order.find(z=>z.alive)||null;
   if(!target)return;
   if(cn==='fire')dmg*=S.classId==='soldier'?2.2:1.6;
   if(cn==='arcane'&&S.classId==='necro')dmg*=1.3;
@@ -1038,7 +1097,7 @@ function attack(groups,chain,comboMult){
   let crit=false;
   let critCh=(S.classId==='soldier'&&S.up.perk>0)?0.1*S.up.perk:0;
   if(hasPassive('critburst'))critCh+=0.15;
-  if(S.classId==='soldier'&&critCh>0&&rnd()<critCh){dmg*=hasPassive('critburst')?4:3;crit=true}
+  if(S.classId==='soldier'&&critCh>0&&prnd()<critCh){dmg*=hasPassive('critburst')?4:3;crit=true}
   dealDamage(target,dmg,cn,crit);
   if(cn==='ice'){const dur=(S.classId==='mage'?3+S.up.perk:2)*(S.weather==='snow'?1.5:1);zs.filter(z=>z.lane===target.lane).forEach(z=>z.slowT=Math.max(z.slowT,dur))}
   if(cn==='nature')healBarricade(size*2*(S.classId==='cleric'?2:1)*(S.weather==='rain'?1.5:1));
@@ -1053,7 +1112,7 @@ function attack(groups,chain,comboMult){
   }
   if(hasPassive('volley')){
    const oth=zs.filter(z=>z!==target&&z.alive);
-   if(oth.length){const v=oth[Math.floor(rand(0,oth.length))];spawnProj(heroPos(),zPos(v),'\u{27B9}',120);dealDamage(v,dmg*0.4,'bolt',false)}
+   if(oth.length){const v=oth[Math.floor(prand(0,oth.length))];spawnProj(heroPos(),zPos(v),'\u{27B9}',120);dealDamage(v,dmg*0.4,'bolt',false)}
   }
   if(hasPassive('blessing'))healBarricade(size);
  });
@@ -1089,7 +1148,7 @@ function killZombie(z){
  const cm=z._crit?1.5:1;
  spawnBlood(kp.x,kp.y,Math.round(18*big*cm));
  spawnGore(kp.x,kp.y,Math.round(3*big*cm));
- addSplat(kp.x+rand(-6,6),kp.y+(z.size||36)*.45,Math.round(11*big));
+ addSplat(kp.x+fxrand(-6,6),kp.y+(z.size||36)*.45,Math.round(11*big));
  if(z.type==='boss'){redFlash();ns(.22,.14)}
  sfx.kill();
  gainXP(Math.round((XPVAL[z.type]||10)*(hasPassive('soulharvest')?1.5:1)));
@@ -1101,7 +1160,7 @@ function healBarricade(n){if(S&&S.mode==='survival')return;S.hp=clamp(S.hp+n,0,S
 function floatText(z,txt,color){
  const f=$('field');const el=document.createElement('div');
  el.className='float';el.textContent=txt;el.style.color=color;
- el.style.left=(z.x*(f.clientWidth-40)+10)+'px';
+ el.style.left=(z.x*(FB.w-40)+10)+'px';
  el.style.top=(z.lane*LH+4)+'px';
  f.appendChild(el);setTimeout(()=>el.remove(),820);
 }
@@ -1120,20 +1179,20 @@ const GORE_KEYS=Object.keys(GORE_TYPES);
 function spawnBlood(x,y,n){
  for(let i=0;i<n;i++){
   if(GRE.blood.length>=BLOOD_MAX)break;
-  const a=rand(0,6.28),sp=rand(40,260);
-  GRE.blood.push({x:x,y:y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-60,life:1,dec:rand(1.2,2.2),sz:rand(2,5),
-   c:'hsl(0,80%,'+(20+Math.floor(rand(0,20)))+'%)'});
+  const a=fxrand(0,6.28),sp=fxrand(40,260);
+  GRE.blood.push({x:x,y:y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-60,life:1,dec:fxrand(1.2,2.2),sz:fxrand(2,5),
+   c:'hsl(0,80%,'+(20+Math.floor(fxrand(0,20)))+'%)'});
  }
 }
 function spawnGore(x,y,n){
  for(let i=0;i<n;i++){
   if(GRE.chunks.length>=CHUNK_MAX)break;
-  const k=GORE_KEYS[Math.floor(rand(0,GORE_KEYS.length))],cfg=GORE_TYPES[k];
-  GRE.chunks.push({x:x+rand(-8,8),y:y+rand(-5,5),
-   vx:rand(cfg.vx[0],cfg.vx[1])*(rnd()<.5?-1:1),vy:rand(cfg.vy[0],cfg.vy[1]),
-   w:cfg.w,h:cfg.h,rot:rand(0,6.28),rotS:rand(cfg.rotS[0],cfg.rotS[1])*(rnd()<.5?-1:1),
+  const k=GORE_KEYS[Math.floor(fxrand(0,GORE_KEYS.length))],cfg=GORE_TYPES[k];
+  GRE.chunks.push({x:x+fxrand(-8,8),y:y+fxrand(-5,5),
+   vx:fxrand(cfg.vx[0],cfg.vx[1])*(fxrnd()<.5?-1:1),vy:fxrand(cfg.vy[0],cfg.vy[1]),
+   w:cfg.w,h:cfg.h,rot:fxrand(0,6.28),rotS:fxrand(cfg.rotS[0],cfg.rotS[1])*(fxrnd()<.5?-1:1),
    g:cfg.g,bounce:cfg.bounce,life:cfg.life,max:cfg.life,type:k,
-   c:cfg.colors[Math.floor(rand(0,cfg.colors.length))],bounced:false});
+   c:cfg.colors[Math.floor(fxrand(0,cfg.colors.length))],bounced:false});
  }
 }
 function addSplat(x,y,r){
@@ -1192,19 +1251,25 @@ function drawChunk(ctx,g){
  ctx.restore();
 }
 
-// ---------- ZOMBIES ----------
-function spawnZombie(forceType){
+// ---------- ZOMBIES (v7.1: the whole horde is pre-rolled at wave start) ----------
+// v7 rolled type/lane/speed at the moment a zombie walked on screen, from the
+// same RNG stream as gore and lightning. Two players on the same Daily seed then
+// got different hordes (docs/qa/v7.1-assessment.md D-1). Pre-rolling the entire
+// horde at wave start makes composition a pure function of (day, wave).
+function rollZombieSpec(forceType){
  const w=S.wave;
  let type=forceType;
  if(!type){
-  const ws=spawnWeights(w);const total=Object.values(ws).reduce((a,b)=>a+b,0);
-  let r=rnd()*total;
+  const ws=spawnWeights(w);const total=Object.keys(ws).reduce((a,k)=>a+ws[k],0);
+  let r=srnd()*total;
   for(const k in ws){r-=ws[k];if(r<=0){type=k;break}}
   type=type||'regular';
  }
- if(!forceType&&hasMut('elite')&&type==='regular'&&rnd()<.4)type='armored';
+ if(!forceType&&hasMut('elite')&&type==='regular'&&srnd()<.4)type='armored';
  const cfg=ZTYPES[type];
- const hpScale=1+0.22*(w-1),spdScale=Math.min(1.6,1+0.04*(w-1));
+ // Boss Rush keeps its promise: bosses there scale 60% faster than campaign bosses
+ const hpScale=1+(0.22*(S.mode==='bossrush'?1.6:1))*(w-1);
+ const spdScale=Math.min(1.6,1+0.04*(w-1));
  let hpm=1,spdm=1;
  if(hasMut('thick'))hpm*=1.45;
  if(hasMut('glass')){hpm*=0.7;spdm*=1.25}
@@ -1212,20 +1277,43 @@ function spawnZombie(forceType){
  if(S.mode==='swarm')hpm*=0.85;
  if(S.mode==='coop')hpm*=1.5;
  if(S.mode==='bossrush'&&type==='boss')hpm*=1.15;
- const z={id:++S.zid,type:type,lane:Math.floor(rand(0,LANES)),x:1.08,
-  hp:Math.round(cfg.hp*hpScale*hpm),maxHp:Math.round(cfg.hp*hpScale*hpm),
-  spd:cfg.spd*spdScale*spdm*rand(0.9,1.1),armor:cfg.armor,gold:cfg.gold,
-  dps:Math.round(cfg.dps*(1+0.1*(w-1))),slowT:0,frozenT:0,attackT:0,alive:true,size:cfg.size,el:null};
+ const maxHp=Math.round(cfg.hp*hpScale*hpm);
+ return {type:type,lane:Math.floor(srand(0,LANES)),x:1.08,
+  hp:maxHp,maxHp:maxHp,
+  spd:cfg.spd*spdScale*spdm*srand(0.9,1.1),armor:cfg.armor,gold:cfg.gold,
+  dps:Math.round(cfg.dps*(1+0.1*(w-1))),size:cfg.size,gap:srand(0.7,1.3),stampede:false};
+}
+function rollHorde(n){
+ const isBoss=(S.mode==='bossrush')||n%10===0;
+ let q=isBoss?Math.max(3,Math.ceil((4+2*n)/2)):4+2*n+(n%5===0?2:0);
+ if(S.mode==='swarm')q=Math.round(q*1.8);
+ if(S.mode==='coop')q=Math.round(q*1.3);
+ const horde=[];
+ for(let i=0;i<q;i++)horde.push(rollZombieSpec(S.mode==='bossrush'?'boss':(isBoss&&i===0?'boss':null)));
+ if(hasMut('stampede')){
+  const at=1+Math.floor(srand(0,Math.max(1,horde.length)));
+  for(let i=0;i<4;i++){const sp=rollZombieSpec('runner');sp.gap=0.25;sp.stampede=true;horde.splice(at+i,0,sp)}
+ }
+ return {horde:horde,isBoss:isBoss,count:horde.length};
+}
+function spawnZombieFromSpec(spec){
+ const cfg=ZTYPES[spec.type];
+ const z={id:++S.zid,type:spec.type,lane:spec.lane,x:spec.x,
+  hp:spec.hp,maxHp:spec.maxHp,spd:spec.spd,armor:spec.armor,gold:spec.gold,
+  dps:spec.dps,slowT:0,frozenT:0,attackT:0,alive:true,size:spec.size,el:null};
  const el=document.createElement('div');
  el.className='zombie'+(cfg.cls?' '+cfg.cls:'');
  el.innerHTML='<span class="zem" style="font-size:'+cfg.size+'px">'+cfg.emoji+'</span><div class="zhp" style="width:'+(cfg.size+6)+'px"><i style="width:100%"></i></div>';
  $('field').appendChild(el);
  z.el=el;
  S.zombies.push(z);
+ return z;
 }
+// Back-compat shim (tests + __ZT): roll one spec and materialise it now.
+function spawnZombie(forceType){return spawnZombieFromSpec(rollZombieSpec(forceType))}
 function updateZombieEl(z){
  if(!z.el)return;
- const fw=$('field').clientWidth-40;
+ const fw=FB.w-40;
  const y=z.lane*LH+Math.max(0,LH-(z.size||36)-14);
  z.el.style.transform='translate('+(10+z.x*fw)+'px,'+y+'px)';
  const bar=z.el.querySelector('.zhp i');
@@ -1240,17 +1328,21 @@ function loop(t){
  // ability cooldown
  if(S.abCD>0){const before=Math.ceil(S.abCD);S.abCD=Math.max(0,S.abCD-dt);if(Math.ceil(S.abCD)!==before)updateAbilityBtn()}
  if(S.ab2CD>0){const before2=Math.ceil(S.ab2CD);S.ab2CD=Math.max(0,S.ab2CD-dt);if(Math.ceil(S.ab2CD)!==before2)updateAbilityBtn()}
- // spawning
+ // spawning (composition was pre-rolled into S.horde at wave start)
  if(S.spawnQueue>0){
   S.spawnT-=dt;
   if(S.spawnT<=0){
-   if(S.bossPending){spawnZombie('boss');S.bossPending=false}else{spawnZombie()}
-   S.spawnQueue--;S.spawnT=S.spawnInt*rand(0.7,1.3);
+   const spec=S.horde[S.hordeAt++];
+   if(spec){
+    spawnZombieFromSpec(spec);
+    S.spawnT=S.spawnInt*spec.gap;
+    if(spec.stampede&&!S._stampedeTold){S._stampedeTold=true;toast('\u{1F40E} STAMPEDE! Runners charge!');ns(.15,.08)}
+   }else S.spawnT=S.spawnInt;
+   S.spawnQueue--;
   }
  }
- // v7: ally auto-attack, stampede event, supply drop
+ // v7.1: ally auto-attack + supply drop (the stampede is now part of S.horde)
  if(S.mode==='coop'){S.allyT-=dt;if(S.allyT<=0){S.allyT=1.35;allyAttack()}}
- if(S.stampedeT>0){S.stampedeT-=dt;if(S.stampedeT<=0){for(let si=0;si<4;si++)spawnZombie('runner');toast('\u{1F40E} STAMPEDE! Runners charge!');ns(.15,.08)}}
  if(S.dropT>0){S.dropT-=dt;if(S.dropT<=0)supplyDrop()}
  // move
  let reached=false;
@@ -1285,35 +1377,44 @@ function loop(t){
 requestAnimationFrame(loop);
 
 // ---------- WAVES ----------
-function startWave(n,keepWeather){
+function startWave(n,keepWeather,keepRolls){
  if(S.mode==='daily'&&n>DAILY_WAVES){dailyComplete();return}
+ // v7.1: re-key the seeded streams per (day, wave). A Daily resumed at wave N now
+ // draws exactly the same wave-N horde as a run that never left the tab.
+ keyDayRng(S.mode==='daily'?parseInt(S.day||dailyDayStr(),10):null,n);
  S.wave=n;S.over=false;
- S._waveHits=0;S._bigMatch=false;S._waveGold=0;S.allyT=1.3;S.stampedeT=0;S.dropT=0;
- if(!keepWeather)S.weather=rollWeather();applyWeather();META.stats.bestWave=Math.max(META.stats.bestWave,n);
+ S._waveHits=0;S._bigMatch=false;S._waveGold=0;S._stormBolt=false;S._stampedeTold=false;S.allyT=1.3;S.dropT=0;
+ // keepRolls = restoring a save: the wave's weather/mutators/challenge come back
+ // from the save, so we must not re-roll them.
+ if(!keepRolls){
+  if(!keepWeather)S.weather=rollWeather();
+  rollMutators(n);rollChallenge(n);
+ }
+ applyWeather();META.stats.bestWave=Math.max(META.stats.bestWave,n);
  if(S.mode==='bossrush')META.stats.bestBossRush=Math.max(META.stats.bestBossRush||0,n);
  if(S.mode==='survival')META.stats.bestSurvival=Math.max(META.stats.bestSurvival||0,n);
  metaSave();checkAch();
- rollMutators(n);rollChallenge(n);
- const isBoss=(S.mode==='bossrush')||n%10===0;
- let q=isBoss?Math.max(3,Math.ceil((4+2*n)/2)):4+2*n+(n%5===0?2:0);
- if(S.mode==='swarm')q=Math.round(q*1.8);
- if(S.mode==='coop')q=Math.round(q*1.3);
- S.spawnQueue=q;
- S.bossPending=isBoss;
+ const rolled=rollHorde(n);
+ S.horde=rolled.horde;S.hordeAt=0;S.spawnQueue=rolled.count;S.bossPending=rolled.isBoss;
  S.spawnInt=Math.max(0.7,2.1-0.1*n)*(S.mode==='swarm'?0.65:1);
  S.spawnT=0.5;
- if(hasMut('stampede'))S.stampedeT=4+rand(0,5);
- if(n>=4&&rnd()<.18)S.dropT=5+rand(0,6);
+ // supply drop: its timing is cosmetic, but its contents are seeded from dropRng()
+ // and keyed per wave, so a save/continue lands the same drop as an uninterrupted run
+ if(n>=4){
+  const dr=dropRng(S.mode==='daily'?parseInt(S.day||dailyDayStr(),10):null,n);
+  const go=dr(),lp=dr();
+  if(go<.18){S.dropSpec={lane:Math.floor(lp*LANES),patch:dr()<.5};S.dropT=5+go*30}
+ }
  S.hp=clamp(S.hp,1,S.maxHp);
  S.screen='game';
  $('ovUpgrade').style.display='none';$('ovOver').style.display='none';$('ovTitle').style.display='none';
  updateHud();updateHeroHud();renderAbilityBtn();sfx.wave();
- if(isBoss)toast((S.mode==='bossrush'?'BOSS RUSH - WAVE ':'BOSS WAVE ')+n+'!');
+ if(rolled.isBoss)toast((S.mode==='bossrush'?'BOSS RUSH - WAVE ':'BOSS WAVE ')+n+'!');
  const notes=[];
  const wdef=WEATHERS[S.weather];if(wdef&&wdef.desc)notes.push(wdef.icon+' '+wdef.name+': '+wdef.desc);
  S.muts.forEach(m=>{const md=MUTATORS[m];if(md)notes.push(md.icon+' '+md.name+': '+md.desc)});
  if(S.chal)notes.push(S.chal.icon+' CHALLENGE: '+S.chal.name+' - '+S.chal.desc);
- notes.forEach((t,i)=>setTimeout(()=>toast(t),(isBoss?1600:250)+i*1500));
+ notes.forEach((t,i)=>setTimeout(()=>toast(t),(rolled.isBoss?1600:250)+i*1500));
  saveGame();
 }
 function waveComplete(){
@@ -1346,23 +1447,36 @@ function waveComplete(){
  $('ovUpgrade').style.display='flex';
  saveGame();
 }
+// v7.1: the game-over copy promises "class, gold, upgrades, hero level and score
+// carry over" back to wave 1. v7 saved the DEAD run instead, so simply reloading
+// the tab offered "CONTINUE - WAVE N" and handed back everything you died with.
+// Death now writes the carry-over save at wave 1 immediately; there is no
+// resumable dead run to exploit.
+function writeRestartSave(){
+ const keep={classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:1,gold:S.gold,score:S.score,kills:S.kills,
+  maxHp:S.maxHp,hp:S.maxHp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP,weather:S.weather,muts:[],chal:null,abCD:0,ab2CD:0,alive:1};
+ try{localStorage.setItem('zms_save',JSON.stringify(keep))}catch(e){}
+ return keep;
+}
 function gameOver(){
  S.over=true;S.screen='over';
  $('abBtn').style.display='none';const b2=$('ab2Btn');if(b2)b2.style.display='none';
+ $('ovUpgrade').style.display='none';
  sfx.over();
  $('ovOver').querySelector('h2').textContent='THE HORDE BROKE THROUGH';
- if(S.mode==='survival'||S.mode==='daily'){try{localStorage.removeItem('zms_save')}catch(e){}}
  const rank=lbRecord();
  let extra='';
  if(S.mode==='daily')extra='<br><b>Daily code:</b> <code>'+dailyCode()+'</code> - every player today fights this exact run. Compare codes.';
  if(S.mode==='survival')extra='<br><b>Survival:</b> the dead stay dead - save wiped.';
- $('overInfo').innerHTML='You fell on wave '+S.wave+' with <b style="color:#ffd24a">'+S.score+'</b> pts ('+S.kills+' kills), hero Lv'+S.heroLvl+' - rank #'+rank+' locally. Class, gold, upgrades, hero level and score carry over.'+extra+lbHtml(10);
- saveGame();
+ $('overInfo').innerHTML='You fell on wave '+S.wave+' with <b style="color:#ffd24a">'+S.score+'</b> pts ('+S.kills+' kills), hero Lv'+S.heroLvl+' - rank #'+rank+' locally. Class, gold, upgrades, hero level and score carry over to a fresh wave 1.'+extra+lbHtml(10);
+ if(S.mode==='survival'||S.mode==='daily'){try{localStorage.removeItem('zms_save')}catch(e){}}
+ else writeRestartSave();
  $('ovOver').style.display='flex';
 }
 function dailyComplete(){
  S.over=true;S.screen='over';
  $('abBtn').style.display='none';const b2=$('ab2Btn');if(b2)b2.style.display='none';
+ $('ovUpgrade').style.display='none';
  sfx.wave();sfx.combo();
  try{localStorage.removeItem('zms_save')}catch(e){}
  META.stats.dailiesDone=(META.stats.dailiesDone||0)+1;metaSave();
@@ -1465,8 +1579,7 @@ function allyAttack(){
 // ---------- FLOW ----------
 function newGame(classId,mode,class2Id){
  mode=mode||'classic';
- RNGF=Math.random;
- if(mode==='daily')RNGF=mulberry32(dailySeed());
+ RPLY=Math.random;RFX=Math.random; // player-skill and juice streams are never seeded
  S=freshState(classId,mode,class2Id);
  if(mode==='daily')S.day=dailyDayStr();
  if(META.stats.classes.indexOf(classId)<0){META.stats.classes.push(classId);metaSave()}checkAch();
@@ -1477,11 +1590,11 @@ function newGame(classId,mode,class2Id){
 }
 function continueGame(d){
  applySave(d);
- if(S.mode==='daily')RNGF=mulberry32(parseInt(S.day||dailyDayStr(),10));else RNGF=Math.random;
+ RPLY=Math.random;RFX=Math.random;
  S.grid=[];document.querySelectorAll('#grid .tile').forEach(e=>e.remove());
  document.querySelectorAll('#field .zombie').forEach(e=>e.remove());
  document.querySelectorAll('#field .drop').forEach(e=>e.remove());
- buildGrid();layout();ensureAlly();startWave(S.wave,true);
+ buildGrid();layout();ensureAlly();startWave(S.wave,true,true);
 }
 let pendingMode='classic',pendingP1=null;
 function selectMode(m){
@@ -1509,10 +1622,8 @@ bindTap($('btnAch'),()=>{renderAch();$('ovAch').style.display='flex'});
 bindTap($('btnAch2'),()=>{renderAch();$('ovAch').style.display='flex'});
 bindTap($('btnAchClose'),()=>{$('ovAch').style.display='none'});
 bindTap($('btnRestart'),()=>{
- // keep class/gold/upgrades/hero, back to wave 1
- const keep={classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:1,gold:S.gold,score:S.score,kills:S.kills,maxHp:S.maxHp,hp:S.maxHp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP};
- try{localStorage.setItem('zms_save',JSON.stringify(keep))}catch(e){}
- continueGame(keep);
+ // keep class/gold/upgrades/hero/score, back to wave 1 (same payload death writes)
+ continueGame(writeRestartSave());
 });
 // boot
 (function(){
@@ -1537,7 +1648,14 @@ window.__ZT={get S(){return S},newGame:newGame,continueGame:continueGame,loadSav
  get META(){return META},checkAch:checkAch,rollWeather:rollWeather,applyWeather:applyWeather,ACH:ACH,WEATHERS:WEATHERS,comboReward:comboReward,renderAch:renderAch,weatherFrame:weatherFrame,goreFrame:goreFrame,
  spawnBlood:spawnBlood,spawnGore:spawnGore,addSplat:addSplat,
  get wst(){return wst},get GRE(){return GRE},get wcv(){return wcv},
- setWeather:function(w){if(S){S.weather=w;applyWeather()}}};
+ setWeather:function(w){if(S){S.weather=w;applyWeather()}},
+ // v7.1 additions: the real logic surface the behavioural suite drives
+ findMatches:findMatches,wouldMatch:wouldMatch,hasMove:hasMove,buildGrid:buildGrid,shuffleGrid:shuffleGrid,
+ resolveBoard:resolveBoard,dealDamage:dealDamage,attack:attack,killZombie:killZombie,
+ applySave:applySave,writeRestartSave:writeRestartSave,rollHorde:rollHorde,rollZombieSpec:rollZombieSpec,
+ spawnZombieFromSpec:spawnZombieFromSpec,keyDayRng:keyDayRng,dropRng:dropRng,dailyWaveCode:dailyWaveCode,
+ syncFieldBox:syncFieldBox,gameOver:gameOver,healBarricade:healBarricade,spawnWeights:spawnWeights,
+ get FB(){return FB},setRng:function(o){if(o.horde)RSPN=o.horde;if(o.wave)RWAVE=o.wave;if(o.player)RPLY=o.player;if(o.fx)RFX=o.fx}};
 </script>
 
 <script>

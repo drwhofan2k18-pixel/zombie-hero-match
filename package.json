@@ -1,1 +1,11 @@
-{"name":"zombie-hero-match","private":true,"type":"module","scripts":{"test":"node --test tests/game.test.js"}}
+{
+  "name": "zombie-hero-match",
+  "private": true,
+  "type": "module",
+  "description": "RJL's Zombie Hero Match - offline match-3 zombie RPG (single-file HTML5)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "test": "node scripts/build.mjs --check && node --test tests/*.test.js"
+  }
+}
