@@ -472,3 +472,85 @@ test('M-2 dailyWaveCode letters are unique per zombie type (regular vs runner)',
   assert.equal(seen.size, 5, 'all five types must appear with distinct letters: ' + code);
   assert.ok(/^[A-Za-z0-9]+$/.test(letters), 'code stays compare-friendly');
 });
+
+// L-1: an unknown mutator id in the save must be dropped, not crash updateHud.
+test('L-1 applySave whitelists saved mutators against MUTATORS', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'classic');
+  await g.step(2);
+  g.M.applySave({ classId: 'soldier', wave: 4, muts: ['goldrush', 'did-i-leave-the-stove-on'] });
+  assert.deepEqual(host(g.S.muts), ['goldrush'], 'unknown keys must be filtered out');
+  assert.doesNotThrow(() => g.M.updateHud ? g.M.updateHud() : null);
+});
+
+// L-2: rolling 2 mutators must actually deliver 2 (draw without replacement).
+test('L-2 rollMutators delivers exactly as many mutators as it rolls', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'classic');
+  await g.step(2);
+  g.__ZT.startWave(12);
+  let forced2 = 0, tries = 200;
+  for (let i = 0; i < tries; i++) {
+    // drive wrand directly: first draw <.35 picks count=2, second draw picks keys
+    let calls = 0;
+    g.__ZT.setRng({ wave: () => (calls++ === 0 ? 0.1 : 0.5) });
+    g.M.rollMutators(12);
+    if (g.S.muts.length === 2) { forced2++; assert.notEqual(g.S.muts[0], g.S.muts[1], 'mutators must not duplicate'); }
+    else assert.equal(g.S.muts.length, 1, 'count=2 must yield 1 or 2, never 0');
+    g.__ZT.setRng({ wave: Math.random });
+  }
+  assert.ok(forced2 > 0, 'the count=2 path must be exercised');
+});
+
+// L-3: even a pathological shuffle must leave a board with a valid move and no
+// pre-made matches (the fallback re-deal path).
+test('L-3 shuffleGrid never leaves an unplayable board', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('mage', 'classic');
+  await g.step(2);
+  for (let i = 0; i < 25; i++) {
+    g.M.shuffleGrid();
+    assert.equal(g.M.findMatches().length, 0, 'no free matches after shuffle');
+    assert.ok(g.M.hasMove(), 'a move must exist after shuffle');
+  }
+});
+
+// L-4: starting a new run must not silently destroy a resumable save.
+test('L-4 pickClass keeps the old save when the player declines the new run', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'classic');
+  await g.step(2);
+  g.__ZT.saveGame();
+  const before = host(JSON.parse(g.storage.getItem('zms_save')));
+  g.__ZT.setConfirm(() => false);            // decline
+  g.__ZT.selectMode('daily');
+  g.__ZT.pickClass('mage');
+  const after = host(JSON.parse(g.storage.getItem('zms_save')));
+  assert.deepEqual(after, before, 'declining must leave the save untouched');
+  g.__ZT.setConfirm(() => true);             // accept
+  g.__ZT.pickClass('mage');
+  const replaced = host(JSON.parse(g.storage.getItem('zms_save')));
+  assert.equal(replaced.classId, 'mage', 'accepting starts the fresh run');
+  assert.notDeepEqual(replaced, before);
+  g.__ZT.setConfirm(null);
+});
+
+// L-5: a Daily continued on a later day must not claim to be "today" - a fresh
+// boot with a stale-seed save must label the button with that seed.
+test('L-5 continue button names a stale daily seed explicitly', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('cleric', 'daily');
+  await g.step(2);
+  g.__ZT.saveGame();
+  const d = host(JSON.parse(g.storage.getItem('zms_save')));
+  const stub = { s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; } };
+  stub.setItem('zms_save', JSON.stringify({ ...d, day: '19991231' }));   // yesterday's seed
+  const g2 = await loadGame(GAME, { localStorage: stub, fixedDateMs: Date.UTC(2026, 8, 24) }); // today is the 24th
+  const label = g2.el('btnContinue').textContent;
+  assert.ok(label.includes('DAILY 19991231'), 'label must name the stale seed, got: ' + label);
+  // a same-day daily keeps the plain label (no seed suffix)
+  const stub2 = { s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; } };
+  stub2.setItem('zms_save', JSON.stringify(d));
+  const g3 = await loadGame(GAME, { localStorage: stub2 });
+  assert.ok(!g3.el('btnContinue').textContent.includes('DAILY'), 'fresh daily must not be flagged stale');
+});

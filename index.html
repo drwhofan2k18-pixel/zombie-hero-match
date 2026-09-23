@@ -314,7 +314,10 @@ function rollMutators(n){
  if(n<3)return;
  const keys=Object.keys(MUTATORS);
  const count=n>=12&&wrnd()<.35?2:(wrnd()<.55?1:0);
- for(let i=0;i<count;i++){const k=keys[Math.floor(wrand(0,keys.length))];if(S.muts.indexOf(k)<0)S.muts.push(k)}
+ // v7.1.1 (audit L-2): draw without replacement - the old redraw-on-duplicate
+ // could silently deliver 1 mutator after rolling 2.
+ const pool=keys.slice();
+ for(let i=0;i<count&&pool.length;i++){const j=Math.floor(wrand(0,pool.length));S.muts.push(pool[j]);pool.splice(j,1)}
 }
 
 // ---------- WAVE CHALLENGES (v7: optional per-wave objectives, reward only) ----------
@@ -481,7 +484,9 @@ function applySave(d){
  S.hp=clamp(d.hp==null?S.maxHp:(Number(d.hp)||0),0,S.maxHp);
  S.up=Object.assign({dmg:0,vit:0,greed:0,perk:0},d.up);
  S.heroLvl=d.heroLvl||1;S.heroXP=d.heroXP||0;S.score=d.score||0;S.kills=d.kills||0;S.weather=d.weather||'clear';S.mode=d.mode||'classic';S.class2Id=d.class2Id||null;S.day=d.day||null;
- S.muts=Array.isArray(d.muts)?d.muts.slice():[];
+ // v7.1.1 (audit L-1): whitelist saved mutators - one unknown/corrupt key would
+ // otherwise throw in updateHud and blank the HUD.
+ S.muts=Array.isArray(d.muts)?d.muts.filter(m=>MUTATORS[m]):[];
  S.chal=d.chal&&d.chal.id?d.chal:null;
  S.abCD=Math.max(0,Number(d.abCD)||0);S.ab2CD=Math.max(0,Number(d.ab2CD)||0);
  // v7.1.1 (audit M-1): restore the pending drop; guard against junk in the save.
@@ -597,6 +602,9 @@ function shuffleGrid(){
   for(let i=colors.length-1;i>0;i--){const j=Math.floor(prand(0,i+1));const x=colors[i];colors[i]=colors[j];colors[j]=x}
   let k=0;S.grid.forEach(row=>row.forEach(t=>{t.color=colors[k++]}));
  }while((findMatches().length||!hasMove())&&guard++<80);
+ // v7.1.1 (audit L-3): guard exhausted (astronomically rare) - fall back to
+ // buildGrid's fresh deal instead of leaving a board with no valid move.
+ if(findMatches().length||!hasMove())buildGrid();
  renderAllTiles();toast('Shuffled!');
 }
 async function resolveBoard(){
@@ -1474,7 +1482,7 @@ function gameOver(){
  $('ovOver').querySelector('h2').textContent='THE HORDE BROKE THROUGH';
  const rank=lbRecord();
  let extra='';
- if(S.mode==='daily')extra='<br><b>Daily code:</b> <code>'+dailyCode()+'</code> - every player today fights this exact run. Compare codes.';
+ if(S.mode==='daily')extra='<br><b>Daily code:</b> <code>'+dailyCode()+'</code> - seed '+(S.day||dailyDayStr())+': every player on this seed fights the exact same run. Compare codes.';
  if(S.mode==='survival')extra='<br><b>Survival:</b> the dead stay dead - save wiped.';
  $('overInfo').innerHTML='You fell on wave '+S.wave+' with <b style="color:#ffd24a">'+S.score+'</b> pts ('+S.kills+' kills), hero Lv'+S.heroLvl+' - rank #'+rank+' locally. Class, gold, upgrades, hero level and score carry over to a fresh wave 1.'+extra+lbHtml(10);
  if(S.mode==='survival'||S.mode==='daily'){try{localStorage.removeItem('zms_save')}catch(e){}}
@@ -1491,7 +1499,7 @@ function dailyComplete(){
  const rank=lbRecord();
  checkAch();
  $('ovOver').querySelector('h2').textContent='DAILY CHALLENGE COMPLETE';
- $('overInfo').innerHTML='You cleared all '+DAILY_WAVES+' waves of today\u2019s seed with <b style="color:#ffd24a">'+S.score+'</b> pts ('+S.kills+' kills) - rank #'+rank+' locally.<br><b>Daily code:</b> <code>'+dailyCode()+'</code> - every player today fights this exact run. Compare codes.'+lbHtml(10);
+ $('overInfo').innerHTML='You cleared all '+DAILY_WAVES+' waves of the '+(S.day||dailyDayStr())+' seed with <b style="color:#ffd24a">'+S.score+'</b> pts ('+S.kills+' kills) - rank #'+rank+' locally.<br><b>Daily code:</b> <code>'+dailyCode()+'</code> - every player on this seed fights the exact same run. Compare codes.'+lbHtml(10);
  $('ovOver').style.display='flex';
 }
 
@@ -1611,10 +1619,20 @@ function selectMode(m){
  $('modeDesc').textContent=MODES[m].icon+' '+MODES[m].desc+(m==='daily'?' Today\u2019s seed: '+dailyDayStr()+'.':'');
  $('pickLabel').textContent=m==='coop'?'PLAYER 1 - PICK YOUR HERO':'PICK YOUR HERO';
 }
+// v7.1.1 (audit L-4): starting a new run overwrites zms_save - make the player
+// confirm when a resumable run is about to be destroyed. Injectable so tests
+// (and headless contexts) can answer for the player.
+let confirmOverride=null;
+function confirmNewRun(){
+ if(confirmOverride)return !!confirmOverride();
+ try{if(typeof confirm==='function')return confirm('Abandon your current run and start fresh?')}catch(e){}
+ return true;
+}
 function pickClass(c){
  if(pendingMode==='coop'&&!pendingP1){pendingP1=c;$('pickLabel').textContent='PLAYER 2 - PICK YOUR HERO';return}
  const m=pendingMode,p1=pendingP1||c,p2=pendingP1?c:null;
  pendingP1=null;$('pickLabel').textContent='PICK YOUR HERO';
+ if(loadSave()&&!confirmNewRun())return;
  try{localStorage.removeItem('zms_save')}catch(e){}
  newGame(p1,m,p2);
 }
@@ -1638,7 +1656,10 @@ bindTap($('btnRestart'),()=>{
  ensureHero();metaLoad();
  selectMode('classic');
  const d=loadSave();
- if(d){const b=$('btnContinue');b.style.display='block';const cn=(HEROES[d.classId]?d.classId:'soldier');b.textContent='CONTINUE \u2014 WAVE '+d.wave+' ('+cn.charAt(0).toUpperCase()+cn.slice(1)+', Lv'+(d.heroLvl||1)+')'}
+ if(d){const b=$('btnContinue');b.style.display='block';const cn=(HEROES[d.classId]?d.classId:'soldier');
+  // v7.1.1 (audit L-5): a Daily continued on a later day is not "today" - say which seed it is.
+  const stale=(d.mode==='daily'&&d.day&&d.day!==dailyDayStr())?('DAILY '+d.day+' \u2014 '):'';
+  b.textContent='CONTINUE \u2014 '+stale+'WAVE '+d.wave+' ('+cn.charAt(0).toUpperCase()+cn.slice(1)+', Lv'+(d.heroLvl||1)+')'}
  $('titleBoard').innerHTML=lbHtml(5);
 })();
 // periodic autosave
@@ -1663,7 +1684,8 @@ window.__ZT={get S(){return S},newGame:newGame,continueGame:continueGame,loadSav
  applySave:applySave,writeRestartSave:writeRestartSave,rollHorde:rollHorde,rollZombieSpec:rollZombieSpec,
  spawnZombieFromSpec:spawnZombieFromSpec,keyDayRng:keyDayRng,dropRng:dropRng,dailyWaveCode:dailyWaveCode,
  syncFieldBox:syncFieldBox,gameOver:gameOver,healBarricade:healBarricade,spawnWeights:spawnWeights,
- get FB(){return FB},setRng:function(o){if(o.horde)RSPN=o.horde;if(o.wave)RWAVE=o.wave;if(o.player)RPLY=o.player;if(o.fx)RFX=o.fx}};
+ get FB(){return FB},setRng:function(o){if(o.horde)RSPN=o.horde;if(o.wave)RWAVE=o.wave;if(o.player)RPLY=o.player;if(o.fx)RFX=o.fx},
+ setConfirm:function(f){confirmOverride=f},confirmNewRun:confirmNewRun};
 </script>
 
 <script>

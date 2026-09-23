@@ -224,7 +224,7 @@ export async function loadGame(htmlPath, opts = {}) {
     clearTimeout: h => { if (h) h.at = Infinity; },
     setInterval: () => ({}),
     clearInterval() {},
-    localStorage: storageStub(),
+    localStorage: opts.localStorage || storageStub(),
     performance: { now: () => now },
     AudioContext: undefined,
     webkitAudioContext: undefined,
