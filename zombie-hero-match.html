@@ -291,8 +291,11 @@ function dailyCode(){
  return 'D'+(S.day||dailyDayStr())+'-'+s.toString(36).toUpperCase()+'-'+k.toString(36).toUpperCase()+'-'+chk.toString(36).toUpperCase();
 }
 // v7.1: exact same horde for every player, wave by wave - assertable in tests
+// v7.1.1 (audit M-2): one unique letter per type - 'regular' and 'runner' both
+// started with 'r', making wave codes ambiguous to compare.
+const WAVE_CODE_TYPE={regular:'R',runner:'u',armored:'A',brute:'B',boss:'O'};
 function dailyWaveCode(n){
- const types=S.zombies.filter(z=>z.alive).map(z=>z.type[0]+z.lane).join('');
+ const types=S.zombies.filter(z=>z.alive).map(z=>(WAVE_CODE_TYPE[z.type]||z.type[0])+z.lane).join('');
  return 'W'+n+'-'+types;
 }
 
@@ -465,7 +468,9 @@ function freshState(classId,mode,class2Id){
 // per-wave mutator/challenge rolls, so a reload silently re-rolled them.
 function saveGame(){
  if(!S)return;
- try{localStorage.setItem('zms_save',JSON.stringify({classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:S.wave,gold:S.gold,score:S.score,kills:S.kills,maxHp:S.maxHp,hp:S.hp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP,weather:S.weather,muts:S.muts,chal:S.chal,abCD:S.abCD,ab2CD:S.ab2CD,alive:1}))}catch(e){}
+ // v7.1.1 (audit M-1): the pending supply drop rides along in the save, so a
+ // mid-wave reload no longer silently deletes it (contents are dropRng-seeded).
+ try{localStorage.setItem('zms_save',JSON.stringify({classId:S.classId,mode:S.mode,class2Id:S.class2Id,day:S.day,wave:S.wave,gold:S.gold,score:S.score,kills:S.kills,maxHp:S.maxHp,hp:S.hp,up:S.up,heroLvl:S.heroLvl,heroXP:S.heroXP,weather:S.weather,muts:S.muts,chal:S.chal,abCD:S.abCD,ab2CD:S.ab2CD,dropT:S.dropT,dropSpec:S.dropSpec,alive:1}))}catch(e){}
 }
 function loadSave(){
  try{const d=JSON.parse(localStorage.getItem('zms_save')||'null');return d&&d.classId&&d.alive!==0?d:null}catch(e){return null}
@@ -479,6 +484,9 @@ function applySave(d){
  S.muts=Array.isArray(d.muts)?d.muts.slice():[];
  S.chal=d.chal&&d.chal.id?d.chal:null;
  S.abCD=Math.max(0,Number(d.abCD)||0);S.ab2CD=Math.max(0,Number(d.ab2CD)||0);
+ // v7.1.1 (audit M-1): restore the pending drop; guard against junk in the save.
+ S.dropT=(d.dropT==null)?0:Math.max(0,Number(d.dropT)||0);
+ S.dropSpec=(d.dropSpec&&typeof d.dropSpec==='object'&&isFinite(d.dropSpec.lane))?{lane:d.dropSpec.lane,patch:!!d.dropSpec.patch}:null;
 }
 
 // ---------- LAYOUT ----------

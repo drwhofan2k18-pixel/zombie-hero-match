@@ -421,3 +421,54 @@ test('build artefact: index.html is generated from the game file', async () => {
   const b = readFileSync(INDEX, 'utf8');
   assert.equal(b, a, 'index.html is stale - run `npm run build`');
 });
+
+// ================================================================ audit 2026-09-23 fixes
+// M-1: a pending supply drop must survive save/load instead of being silently
+// deleted by a mid-wave reload.
+test('M-1 a pending supply drop (timer + pre-rolled contents) survives save/applySave', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'classic');
+  await g.step(2);
+  g.S.dropT = 12.5;
+  g.S.dropSpec = { lane: 3, patch: true };
+  g.__ZT.saveGame();
+  const d = g.__ZT.loadSave();
+  assert.equal(d.dropT, 12.5, 'drop timer must be persisted');
+  assert.deepEqual(host(d.dropSpec), { lane: 3, patch: true }, 'drop contents must be persisted');
+  g.M.applySave(d);
+  assert.equal(g.S.dropT, 12.5, 'restored run keeps the drop timer');
+  assert.deepEqual(host(g.S.dropSpec), { lane: 3, patch: true }, 'restored run keeps the drop contents');
+  // a save from before this fix (no drop fields) restores to no pending drop
+  delete d.dropT; delete d.dropSpec;
+  g.M.applySave(d);
+  assert.equal(g.S.dropT, 0);
+  assert.equal(g.S.dropSpec, null);
+  // junk in the save must not poison the state
+  g.M.applySave({ ...d, dropT: 'banana', dropSpec: { lane: 'x' } });
+  assert.equal(g.S.dropT, 0);
+  assert.equal(g.S.dropSpec, null);
+});
+
+// M-2: wave codes must give every zombie type its own letter, so codes from two
+// devices can actually be compared.
+test('M-2 dailyWaveCode letters are unique per zombie type (regular vs runner)', async () => {
+  const g = await loadGame(GAME);
+  g.__ZT.newGame('soldier', 'daily');
+  await g.step(2);
+  clearHorde(g);
+  addZ(g, { type: 'regular', lane: 0 });
+  addZ(g, { type: 'runner', lane: 1 });
+  addZ(g, { type: 'armored', lane: 2 });
+  addZ(g, { type: 'brute', lane: 3 });
+  addZ(g, { type: 'boss', lane: 4 });
+  const code = g.__ZT.dailyWaveCode(3);
+  const letters = code.replace(/^W3-/, '');
+  const seen = new Set();
+  for (let i = 0; i < letters.length; i += 2) {
+    const t = letters[i];
+    assert.ok(!seen.has(t), `letter ${t} must map to exactly one type`);
+    seen.add(t);
+  }
+  assert.equal(seen.size, 5, 'all five types must appear with distinct letters: ' + code);
+  assert.ok(/^[A-Za-z0-9]+$/.test(letters), 'code stays compare-friendly');
+});
