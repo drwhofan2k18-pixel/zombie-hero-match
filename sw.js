@@ -1,5 +1,5 @@
 // RJL's Zombie Hero Match - offline cache
-const CACHE = 'zhm-v7';
+const CACHE = 'zhm-v8';
 const ASSETS = [
   './',
   'index.html',

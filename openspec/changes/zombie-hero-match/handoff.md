@@ -77,3 +77,12 @@ Shipped on main:
 - itch.io: NOT published - needs Roger's itch login; index.html uploads as-is. Rename question still open.
 - Dual entry points index.html / zombie-hero-match.html remain byte-identical (gate enforces).
 - SW cache bumped to zhm-v7. Gates: 21/21 (16 existing + 5 v7).
+
+## Gate results (2026-10-07, v8 head)
+- node --test tests/game.test.js: 27/27 pass (v7 suite plus 6 new v8 tests: META.opts
+  defaults + metaLoad merge, sound gate in tn/ns, vib helper gating + >=6 wiring sites
+  incl. game-over/boss/achievement patterns, settings UI buttons + renderOpts, startWave
+  cooldown reset, sw cache zhm-v8).
+- v8 systems: persisted sound/haptics options (zms_meta.opts), vib() helper wired at
+  match/cascade/kill/boss-wave/achievement/game-over, title-screen toggles with live
+  state labels, ability cooldowns reset each wave (audit F10 closed).

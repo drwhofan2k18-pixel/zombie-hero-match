@@ -31,3 +31,10 @@
 29. [x] v6 gore: blood bursts, tumbling chunks (flesh/bone/eyeball/teeth), fading splatter decals; boss/brute/crit scaling; pooled caps; boss red flash
 30. [x] v6 weather roll: previous condition excluded, boss waves court storms (30%); zombietoss weather-roll behavior documented (static light rain, debug-key only)
 31. [x] v6 gates: tests extended to 16/16 (v6 presence, depth-layer structure, gore wiring/caps, functional rollWeather distribution); fresh-clone npm test verified
+
+## v8 — feel & settings (2026-10-07)
+- [x] Persisted sound + haptics options in zms_meta with title-screen toggles
+- [x] Procedural haptics on match, cascade, kill, boss wave, achievement, game-over
+- [x] Sound gate in tn/ns honoring the sound option
+- [x] Audit F10: ability cooldowns reset at wave start
+- [x] Gate: 27/27 tests green; sw cache bumped to zhm-v8; index.html mirrored

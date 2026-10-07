@@ -180,3 +180,41 @@ test('v7 survival blocks barricade repair and daily has a fixed length', () => {
   assert.match(html, /const DAILY_WAVES=25/);
   assert.match(html, /S\.mode==='daily'&&n>DAILY_WAVES/);
 });
+
+// ── v8: feel & settings (sound/haptics toggles, wave cooldown reset) ──
+
+test('v8: settings persistence — META.opts with sound+haptics, loaded and merged', () => {
+  assert.match(html, /opts:\{sound:true,haptics:true\}/, 'META defaults include opts');
+  assert.match(html, /META\.opts=Object\.assign\(\{sound:true,haptics:true\}/, 'metaLoad merges opts');
+  assert.match(html, /metaSave\(\)/);
+});
+
+test('v8: sound gate — tn and ns honor the sound option', () => {
+  assert.match(html, /function tn\(f,d,t,v\)\{try\{ai\(\);if\(META\.opts&&!META\.opts\.sound\)return;/, 'tn gated');
+  assert.match(html, /function ns\(d,v\)\{try\{ai\(\);if\(META\.opts&&!META\.opts\.sound\)return;/, 'ns gated');
+});
+
+test('v8: haptics helper exists, is gated, and wired into game events', () => {
+  assert.match(html, /function vib\(p\)\{try\{if\(META\.opts&&META\.opts\.haptics&&navigator\.vibrate\)navigator\.vibrate\(p\)\}catch\(e\)\{\}\}/, 'vib helper');
+  const calls = (html.match(/vib\(/g) || []).length;
+  assert.ok(calls >= 6, `vib wired at >=6 call sites (found ${calls})`);
+  assert.match(html, /vib\(\[80,40,80\]\)/, 'game-over pattern');
+  assert.match(html, /vib\(\[30,50,30\]\)/, 'boss wave pattern');
+  assert.match(html, /vib\(\[15,40,20\]\)/, 'achievement pattern');
+});
+
+test('v8: settings UI buttons present and toggle persistence', () => {
+  assert.match(html, /id="optSound"/, 'sound toggle button');
+  assert.match(html, /id="optHaptics"/, 'haptics toggle button');
+  assert.match(html, /function renderOpts\(\)/, 'toggle state renderer');
+});
+
+test('v8: ability cooldowns reset on wave start (audit F10 fix)', () => {
+  const startWaveBody = html.slice(html.indexOf('function startWave'), html.indexOf('function waveComplete'));
+  assert.match(startWaveBody, /S\.abCD=0;S\.ab2CD=0;/, 'startWave resets abCD and ab2CD');
+});
+
+test('v8: service worker cache bumped to zhm-v8', () => {
+  assert.match(sw, /zhm-v8/);
+  assert.doesNotMatch(sw, /zhm-v7/);
+});

@@ -149,6 +149,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0a0a14;font-family:
   <button class="btn classbtn" id="btnNecro">&#129499; NECRO<small>+20% damage, arcane 1.3x. Lv2: Soul Harvest. Lv4: Death Wave (tap button).</small></button>
   <button class="btn alt" id="btnAch">&#127942; ACHIEVEMENTS</button>
   <button class="btn alt" id="btnContinue" style="display:none">CONTINUE</button>
+  <div id="optRow"><button class="btn alt" id="optSound">&#128266; SOUND: ON</button><button class="btn alt" id="optHaptics">&#128243; HAPTICS: ON</button></div>
   <div id="titleBoard"></div>
 </div>
 
@@ -185,8 +186,9 @@ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 // ---------- AUDIO (WebAudio blips, style reused from zombietoss repo) ----------
 let AC;
 function ai(){if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}}if(AC&&AC.state==='suspended')AC.resume()}
-function tn(f,d,t,v){try{ai();if(!AC)return;const o=AC.createOscillator(),g=AC.createGain();o.type=t||'sine';o.frequency.setValueAtTime(f,AC.currentTime);g.gain.setValueAtTime(v||.1,AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(AC.currentTime+d)}catch(e){}}
-function ns(d,v){try{ai();if(!AC)return;const n=AC.sampleRate*d,s=AC.createBuffer(1,n,AC.sampleRate),ch=s.getChannelData(0);for(let i=0;i<n;i++)ch[i]=(Math.random()*2-1)*(1-i/n);const src=AC.createBufferSource();src.buffer=s;const g=AC.createGain();g.gain.setValueAtTime(v||.06,AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);src.connect(g);g.connect(AC.destination);src.start()}catch(e){}}
+function tn(f,d,t,v){try{ai();if(META.opts&&!META.opts.sound)return;if(!AC)return;const o=AC.createOscillator(),g=AC.createGain();o.type=t||'sine';o.frequency.setValueAtTime(f,AC.currentTime);g.gain.setValueAtTime(v||.1,AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(AC.currentTime+d)}catch(e){}}
+function ns(d,v){try{ai();if(META.opts&&!META.opts.sound)return;if(!AC)return;const n=AC.sampleRate*d,s=AC.createBuffer(1,n,AC.sampleRate),ch=s.getChannelData(0);for(let i=0;i<n;i++)ch[i]=(Math.random()*2-1)*(1-i/n);const src=AC.createBufferSource();src.buffer=s;const g=AC.createGain();g.gain.setValueAtTime(v||.06,AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);src.connect(g);g.connect(AC.destination);src.start()}catch(e){}}
+function vib(p){try{if(META.opts&&META.opts.haptics&&navigator.vibrate)navigator.vibrate(p)}catch(e){}}
 const sfx={
   match:()=>{tn(440,.07,'square',.07);setTimeout(()=>tn(660,.08,'square',.07),60)},
   cascade:()=>{tn(660,.06,'square',.07);setTimeout(()=>tn(880,.09,'square',.07),60)},
@@ -543,7 +545,7 @@ async function resolveBoard(){
  let groups=findMatches();
  while(groups.length){
   S.chain++;
-  if(S.chain>1)sfx.cascade();else sfx.match();
+  if(S.chain>1){sfx.cascade();vib([12,30,12])}else{sfx.match();vib(8)}
   groups.forEach(gp=>gp.cells.forEach(cell=>{const t=S.grid[cell.r][cell.c];if(t.el)t.el.classList.add('pop')}));
   const cm=comboReward(groups,S.chain);attack(groups,S.chain,cm);
   await delay(200);
@@ -889,8 +891,8 @@ function applyWeather(){
 }
 // ---------- META (achievements + lifetime stats; survives runs, zombietoss pattern) ----------
 const META_KEY='zms_meta';
-let META={ach:{},stats:{totalKills:0,bossKills:0,bestWave:0,combos4:0,combos5:0,multiMatches:0,bestChain:0,closeCall:0,classes:[],challengesDone:0,dailiesDone:0,coopWaves:0,mutWaves:0,bestBossRush:0,bestSurvival:0}};
-function metaLoad(){try{const d=JSON.parse(localStorage.getItem(META_KEY)||'null');if(d){META.ach=d.ach||{};META.stats=Object.assign(META.stats,d.stats||{})}}catch(e){}}
+let META={ach:{},stats:{totalKills:0,bossKills:0,bestWave:0,combos4:0,combos5:0,multiMatches:0,bestChain:0,closeCall:0,classes:[],challengesDone:0,dailiesDone:0,coopWaves:0,mutWaves:0,bestBossRush:0,bestSurvival:0},opts:{sound:true,haptics:true}};
+function metaLoad(){try{const d=JSON.parse(localStorage.getItem(META_KEY)||'null');if(d){META.ach=d.ach||{};META.stats=Object.assign(META.stats,d.stats||{});META.opts=Object.assign({sound:true,haptics:true},d.opts||{})}}catch(e){}}
 function metaSave(){try{localStorage.setItem(META_KEY,JSON.stringify(META))}catch(e){}}
 const ACH=[
  {id:'firstkill',name:'First Blood',icon:'\u{1FA78}',desc:'Kill your first zombie',cond:()=>META.stats.totalKills>=1},
@@ -924,7 +926,7 @@ const ACH=[
 ];
 function unlockAch(a){
  META.ach[a.id]=Date.now();metaSave();
- sfx.combo();
+ sfx.combo();vib([15,40,20]);
  setTimeout(()=>toast('\u{1F3C6} '+a.name+' - '+a.desc),a._d||0);
  renderAch();
 }
@@ -1091,7 +1093,7 @@ function killZombie(z){
  spawnGore(kp.x,kp.y,Math.round(3*big*cm));
  addSplat(kp.x+rand(-6,6),kp.y+(z.size||36)*.45,Math.round(11*big));
  if(z.type==='boss'){redFlash();ns(.22,.14)}
- sfx.kill();
+ sfx.kill();vib(z.type==='boss'?[25,40,25]:18);
  gainXP(Math.round((XPVAL[z.type]||10)*(hasPassive('soulharvest')?1.5:1)));
  setTimeout(()=>{if(z.el)z.el.remove()},380);
  setTimeout(saveGame,0);
@@ -1289,6 +1291,7 @@ function startWave(n,keepWeather){
  if(S.mode==='daily'&&n>DAILY_WAVES){dailyComplete();return}
  S.wave=n;S.over=false;
  S._waveHits=0;S._bigMatch=false;S._waveGold=0;S.allyT=1.3;S.stampedeT=0;S.dropT=0;
+ S.abCD=0;S.ab2CD=0;
  if(!keepWeather)S.weather=rollWeather();applyWeather();META.stats.bestWave=Math.max(META.stats.bestWave,n);
  if(S.mode==='bossrush')META.stats.bestBossRush=Math.max(META.stats.bestBossRush||0,n);
  if(S.mode==='survival')META.stats.bestSurvival=Math.max(META.stats.bestSurvival||0,n);
@@ -1308,7 +1311,7 @@ function startWave(n,keepWeather){
  S.screen='game';
  $('ovUpgrade').style.display='none';$('ovOver').style.display='none';$('ovTitle').style.display='none';
  updateHud();updateHeroHud();renderAbilityBtn();sfx.wave();
- if(isBoss)toast((S.mode==='bossrush'?'BOSS RUSH - WAVE ':'BOSS WAVE ')+n+'!');
+ if(isBoss){toast((S.mode==='bossrush'?'BOSS RUSH - WAVE ':'BOSS WAVE ')+n+'!');vib([30,50,30])}
  const notes=[];
  const wdef=WEATHERS[S.weather];if(wdef&&wdef.desc)notes.push(wdef.icon+' '+wdef.name+': '+wdef.desc);
  S.muts.forEach(m=>{const md=MUTATORS[m];if(md)notes.push(md.icon+' '+md.name+': '+md.desc)});
@@ -1349,7 +1352,7 @@ function waveComplete(){
 function gameOver(){
  S.over=true;S.screen='over';
  $('abBtn').style.display='none';const b2=$('ab2Btn');if(b2)b2.style.display='none';
- sfx.over();
+ sfx.over();vib([80,40,80]);
  $('ovOver').querySelector('h2').textContent='THE HORDE BROKE THROUGH';
  if(S.mode==='survival'||S.mode==='daily'){try{localStorage.removeItem('zms_save')}catch(e){}}
  const rank=lbRecord();
@@ -1506,6 +1509,14 @@ document.querySelectorAll('#modeRow .modebtn').forEach(b=>bindTap(b,()=>selectMo
 bindTap($('btnContinue'),()=>{const d=loadSave();if(d)continueGame(d)});
 bindTap($('btnNext'),()=>startWave(S.wave+1));
 bindTap($('btnAch'),()=>{renderAch();$('ovAch').style.display='flex'});
+function renderOpts(){
+ const s=$('optSound'),h=$('optHaptics');if(!s||!h)return;
+ s.innerHTML=(META.opts.sound?'&#128266; SOUND: ON':'&#128263; SOUND: OFF');
+ h.innerHTML=(META.opts.haptics?'&#128243; HAPTICS: ON':'HAPTICS: OFF');
+}
+bindTap($('optSound'),()=>{META.opts.sound=!META.opts.sound;metaSave();renderOpts();sfx.buy()});
+bindTap($('optHaptics'),()=>{META.opts.haptics=!META.opts.haptics;metaSave();renderOpts();vib(20)});
+renderOpts();
 bindTap($('btnAch2'),()=>{renderAch();$('ovAch').style.display='flex'});
 bindTap($('btnAchClose'),()=>{$('ovAch').style.display='none'});
 bindTap($('btnRestart'),()=>{
